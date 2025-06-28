@@ -4,22 +4,6 @@
  */
 
 import { GoogleGenAI } from '@google/genai';
-import { initializeApp } from 'firebase/app';
-import {
-  getFirestore,
-  collection,
-  onSnapshot,
-  addDoc,
-  query,
-  orderBy,
-  Timestamp,
-} from 'firebase/firestore';
-import {
-  getStorage,
-  ref,
-  uploadBytes,
-  getDownloadURL,
-} from 'firebase/storage';
 
 // --- CONFIGURATION --- //
 const API_KEY = process.env.API_KEY;
@@ -28,29 +12,13 @@ if (!API_KEY) {
 }
 const ai = new GoogleGenAI({ apiKey: API_KEY });
 
-// --- FIREBASE CONFIGURATION --- //
-// IMPORTANT: Replace with your actual Firebase project configuration
-const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT_ID.appspot.com",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId: "YOUR_APP_ID"
-};
-
-// Initialize Firebase
-const firebaseApp = initializeApp(firebaseConfig);
-const db = getFirestore(firebaseApp);
-const storage = getStorage(firebaseApp);
-const eventsCollection = collection(db, 'events');
-
 // --- MAP CONSTANTS --- //
+// Approximate bounding box for Bengaluru map visualization
 const MAP_BOUNDS = {
-  latMin: 12.82,
-  latMax: 13.15,
-  lngMin: 77.45,
-  lngMax: 77.78,
+    latMin: 12.82,
+    latMax: 13.15,
+    lngMin: 77.45,
+    lngMax: 77.78,
 };
 
 // --- TYPE DEFINITIONS --- //
@@ -69,9 +37,12 @@ type EventCategory =
 type EventReport = {
   id: string;
   userDescription: string;
-  imageUrl?: string;
+  userImage?: {
+    base64: string;
+    mimeType: string;
+  };
   location: GeoLocation;
-  timestamp: Timestamp; // Use Firestore Timestamp
+  timestamp: string;
   ai: {
     title: string;
     summary: string;
@@ -79,19 +50,64 @@ type EventReport = {
   };
 };
 
+// --- SAMPLE DATA --- //
+const sampleEvents: EventReport[] = [
+    {
+        id: 'sample-1',
+        userDescription: 'Huge traffic jam near Silk Board junction due to a broken down bus.',
+        location: { lat: 12.917, lng: 77.624 },
+        timestamp: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+        ai: {
+            title: 'Heavy Traffic at Silk Board',
+            summary: 'A broken-down bus is causing a major traffic jam near the Silk Board junction.',
+            category: 'Traffic',
+        },
+    },
+    {
+        id: 'sample-2',
+        userDescription: 'Waterlogging in 5th block Koramangala after the heavy rain.',
+        location: { lat: 12.935, lng: 77.624 },
+        timestamp: new Date(Date.now() - 35 * 60 * 1000).toISOString(),
+        ai: {
+            title: 'Waterlogging in Koramangala',
+            summary: 'Heavy rainfall has led to significant waterlogging in Koramangala 5th Block.',
+            category: 'Civic Issue',
+        },
+    },
+    {
+        id: 'sample-3',
+        userDescription: 'A free concert is happening at Cubbon Park near the central library.',
+        location: { lat: 12.975, lng: 77.592 },
+        timestamp: new Date(Date.now() - 90 * 60 * 1000).toISOString(),
+        ai: {
+            title: 'Concert in Cubbon Park',
+            summary: 'A live music event is currently underway in Cubbon Park for the public.',
+            category: 'Community Event',
+        },
+    },
+     {
+        id: 'sample-4',
+        userDescription: 'A large, dangerous pothole has formed on MG Road near the metro station.',
+        location: { lat: 12.9759, lng: 77.6068 },
+        timestamp: new Date(Date.now() - 120 * 60 * 1000).toISOString(),
+        ai: {
+            title: 'Large Pothole on MG Road',
+            summary: 'A hazardous pothole requires immediate attention on MG Road, posing a risk to vehicles.',
+            category: 'Safety Hazard',
+        },
+    }
+];
+
+
 // --- APPLICATION STATE --- //
 const appState = {
-  events: [] as EventReport[],
+  events: [...sampleEvents] as EventReport[],
   isModalOpen: false,
   isSubmitting: false,
   error: null as string | null,
   form: {
     description: '',
-    image: null as {
-      file: File;
-      base64: string;
-      mimeType: string;
-    } | null,
+    image: null as { base64: string; mimeType: string } | null,
     location: null as GeoLocation | null,
   },
 };
@@ -110,7 +126,7 @@ const appRoot = document.getElementById('app')!;
 
 // --- RENDER FUNCTIONS --- //
 function render() {
-  const { events, isModalOpen } = appState;
+  const { events } = appState;
   appRoot.innerHTML = `
     <div class="main-container">
       <aside class="feed-panel">
@@ -138,21 +154,17 @@ function render() {
 }
 
 function renderEventCard(event: EventReport): string {
-  const { id, ai, timestamp, imageUrl } = event;
+  const { id, ai, timestamp } = event;
   const icon = ICONS[ai.category] || ICONS.Other;
-  const date = timestamp.toDate(); // Convert Firestore Timestamp to Date
   return `
     <div class="event-card" id="event-${id}">
-      ${imageUrl ? `<img src="${imageUrl}" alt="${ai.title}" class="event-image">` : ''}
-      <div class="event-card-content">
-        <div class="event-card-header">
-          <span class="event-icon">${icon}</span>
-          <h3 class="event-title">${ai.title}</h3>
-        </div>
-        <p class="event-summary">${ai.summary}</p>
-        <div class="event-footer">
-          <span>${ai.category} &bull; ${date.toLocaleString()}</span>
-        </div>
+      <div class="event-card-header">
+        <span class="event-icon">${icon}</span>
+        <h3 class="event-title">${ai.title}</h3>
+      </div>
+      <p class="event-summary">${ai.summary}</p>
+      <div class="event-footer">
+        <span>${ai.category} &bull; ${new Date(timestamp).toLocaleString()}</span>
       </div>
     </div>
   `;
@@ -162,14 +174,17 @@ function renderMapMarker(event: EventReport): string {
     const { id, location, ai } = event;
     const { latMin, latMax, lngMin, lngMax } = MAP_BOUNDS;
     
+    // Check if the location is within the defined map bounds
     if (location.lat < latMin || location.lat > latMax || location.lng < lngMin || location.lng > lngMax) {
-      return '';
+      return ''; // Don't render marker if it's outside the map area
     }
 
     const latRange = latMax - latMin;
     const lngRange = lngMax - lngMin;
 
+    // Y position (latitude). Higher lat should be higher on map (smaller top %).
     const top = (1 - (location.lat - latMin) / latRange) * 100;
+    // X position (longitude).
     const left = ((location.lng - lngMin) / lngRange) * 100;
 
     const icon = ICONS[ai.category] || ICONS.Other;
@@ -218,6 +233,17 @@ function renderModal(): string {
   `;
 }
 
+function updateFeed(event: EventReport) {
+    const feed = document.getElementById('event-feed')!;
+    const map = document.getElementById('map-panel')!;
+    const placeholder = feed.querySelector('p');
+    if (placeholder && appState.events.length === 1) { // Check if it's the first real event after samples
+        placeholder.remove();
+    }
+    feed.insertAdjacentHTML('afterbegin', renderEventCard(event));
+    map.insertAdjacentHTML('beforeend', renderMapMarker(event));
+}
+
 // --- EVENT HANDLERS & LOGIC --- //
 function attachEventListeners() {
   document.getElementById('report-fab')?.addEventListener('click', openModal);
@@ -232,14 +258,14 @@ function attachEventListeners() {
 
 function openModal() {
   appState.isModalOpen = true;
-  document.body.classList.add('modal-open');
+  document.getElementById('modal-overlay')?.classList.add('visible');
   render(); // Re-render to show modal correctly
 }
 
 function closeModal() {
   appState.isModalOpen = false;
   appState.form = { description: '', image: null, location: null }; // Reset form
-  document.body.classList.remove('modal-open');
+  document.getElementById('modal-overlay')?.classList.remove('visible');
   render();
 }
 
@@ -257,18 +283,7 @@ async function handleFormSubmit(e: Event) {
   render(); // Re-render to show loading state
 
   try {
-    let imageUrl: string | undefined = undefined;
-
-    // 1. Upload image to Firebase Storage if it exists
-    if (appState.form.image) {
-      const imageFile = appState.form.image.file;
-      const storageRef = ref(storage, `images/${Date.now()}-${imageFile.name}`);
-      const uploadResult = await uploadBytes(storageRef, imageFile);
-      imageUrl = await getDownloadURL(uploadResult.ref);
-    }
-    
-    // 2. Call Gemini API for analysis
-    const aiResponse = await callGeminiAPI(description, appState.form.image ? {base64: appState.form.image.base64, mimeType: appState.form.image.mimeType} : null);
+    const aiResponse = await callGeminiAPI(description, appState.form.image);
     
     let parsedResponse;
     try {
@@ -284,12 +299,12 @@ async function handleFormSubmit(e: Event) {
         throw new Error("AI returned an invalid format.");
     }
 
-    // 3. Save the complete report to Firestore
-    const newEventData = {
+    const newEvent: EventReport = {
+        id: new Date().getTime().toString(),
         userDescription: description,
-        imageUrl,
+        userImage: appState.form.image || undefined,
         location: appState.form.location,
-        timestamp: Timestamp.now(), // Use Firestore server timestamp
+        timestamp: new Date().toISOString(),
         ai: {
             title: parsedResponse.title || 'Untitled Event',
             summary: parsedResponse.summary || 'No summary available.',
@@ -297,12 +312,10 @@ async function handleFormSubmit(e: Event) {
         },
     };
 
-    await addDoc(eventsCollection, newEventData);
-    
-    // The onSnapshot listener will handle the UI update automatically.
-    showToast('Report submitted successfully!', 'success');
+    appState.events.unshift(newEvent);
+    appState.isSubmitting = false;
+    updateFeed(newEvent); // Efficiently add new event without full re-render
     closeModal();
-
   } catch (error) {
     console.error('Error submitting report:', error);
     showToast(error instanceof Error ? error.message : 'An unknown error occurred.', 'error');
@@ -319,7 +332,7 @@ function handleImageChange(e: Event) {
   const reader = new FileReader();
   reader.onload = () => {
     const base64 = (reader.result as string).split(',')[1];
-    appState.form.image = { file, base64, mimeType: file.type };
+    appState.form.image = { base64, mimeType: file.type };
     const preview = document.getElementById('image-preview') as HTMLImageElement;
     preview.src = `data:${file.type};base64,${base64}`;
     preview.style.display = 'block';
@@ -391,34 +404,14 @@ async function callGeminiAPI(description: string, image: { base64: string; mimeT
 }
 
 function showToast(message: string, type: 'success' | 'error' = 'error') {
-    const toast = document.getElementById('toast');
-    if (!toast) return;
+    const toast = document.getElementById('toast')!;
     toast.textContent = message;
-    toast.className = `toast show ${type}`;
+    toast.style.backgroundColor = type === 'error' ? 'var(--error)' : 'var(--secondary)';
+    toast.classList.add('show');
     setTimeout(() => {
         toast.classList.remove('show');
     }, 3000);
 }
 
 // --- INITIALIZE APP --- //
-function listenForEvents() {
-    const q = query(eventsCollection, orderBy('timestamp', 'desc'));
-    onSnapshot(q, (snapshot) => {
-        const events: EventReport[] = [];
-        snapshot.forEach(doc => {
-            events.push({ id: doc.id, ...doc.data() } as EventReport);
-        });
-        appState.events = events;
-        render();
-    }, (error) => {
-        console.error("Error fetching events:", error);
-        showToast("Could not connect to the database.", "error");
-    });
-}
-
-document.addEventListener('DOMContentLoaded', () => {
-    // Initial render to show loading state or empty shell
-    render();
-    // Start listening for real-time updates from Firebase
-    listenForEvents();
-});
+document.addEventListener('DOMContentLoaded', render);
